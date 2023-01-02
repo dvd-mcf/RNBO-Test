@@ -1,73 +1,295 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
-    <meta name="theme-color" content="#000000">
-    <meta name="rnbo-version" content="1.0.0-alpha.5">
-    <link rel="stylesheet" href="style/style.css">
+  <meta charset="utf-8">
+  <meta name="author" content="Chris Webb, chris@arachsys.com">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MIDI System Exclusive Tool</title>
 
-    <title>RNBO Test</title>
-	
-    <script src="https://cdn.jsdelivr.net/npm/p5@1.5.0/lib/p5.js"></script>
-    <script src="sketch.js"></script>
-	
+  <script>
+    async function midi(rxchooser, rxchooser2, rxchooser3, rxchooser4, txchooser, receive) {
+      let access, input, input2, input3, input4, output;
+
+      try {
+        access = await navigator.requestMIDIAccess({sysex: true});
+      } catch {
+        return null;
+      }
+	  
+	  //Lots of duplication here
+
+      rxchooser = rxchooser(function(id) {
+		  console.log("RX 1 triggered");
+
+        if (input && input.id != id && receive)
+          input.removeEventListener("midimessage", receive);
+        input = access.inputs.get(id);
+        if (input && receive)
+          input.addEventListener("midimessage", receive);
+		
+      });
+	  
+      rxchooser2 = rxchooser2(function(id) {
+		  console.log("RX 2 triggered");
+		  
+
+        if (input2 && input2.id != id && receive)
+          input2.removeEventListener("midimessage", receive);
+        input2 = access.inputs.get(id);
+        if (input2 && receive)
+          input2.addEventListener("midimessage", receive);
+      });
+	  
+      rxchooser3 = rxchooser3(function(id) {
+
+        if (input3 && input.id != id && receive)
+          input3.removeEventListener("midimessage", receive);
+        input3 = access.inputs.get(id);
+        if (input3 && receive)
+          input3.addEventListener("midimessage", receive);
+      });
+	  
+
+	  
+      rxchooser4 = rxchooser4(function(id) {
+        if (input4 && input4.id != id && receive)
+          input4.removeEventListener("midimessage", receive);
+        input4 = access.inputs.get(id);
+        if (input4 && receive)
+          input4.addEventListener("midimessage", receive);
+      });
+	  
+	  //Unduplicate this
+
+
+      txchooser = txchooser(function(id) {
+        output = access.outputs.get(id);
+      });
+
+      access.addEventListener("statechange", function(event) {
+        const id = event.port.id, state = event.port.state;
+        const name = state == "connected" ? event.port.name : null;
+        if (event.port.type == "input")
+          rxchooser(id, name)
+			;
+
+        else if (event.port.type == "output")
+          txchooser(id, name);
+      });
+
+      access.inputs.forEach(port => rxchooser(port.id, port.name));
+      access.inputs.forEach(port => rxchooser2(port.id, port.name));
+      access.inputs.forEach(port => rxchooser3(port.id, port.name));
+      access.inputs.forEach(port => rxchooser4(port.id, port.name));
+	  
+	  
+      access.outputs.forEach(port => txchooser(port.id, port.name));
+      return data => output && output.send(data);
+    }
+
+    function chooser(select) {
+      select = document.getElementById(select);
+      return function(choose) {
+        select.onchange = event => choose(select.value);
+        return function(id, name) {
+          for (let option = 0; option < select.length; option++)
+            if (select.options[option].value == id) {
+              if (name) {
+                if (select.options[option].text != name)
+                  select.options[option].text = name;
+                return;
+              }
+              select.options[option].remove(option);
+            }
+          if (name) {
+            const option = document.createElement("option");
+            option.value = id;
+            option.text = name;
+            select.add(option);
+          }
+          choose(select.value);
+        };
+      };
+    }
+
+    function shell(container, handler) {
+      const input = document.createElement("input");
+      const prompt = document.createElement("p");
+      let history = [], buffer = [""], index = 0;
+
+      function print(message, color) {
+        const line = document.createElement("p");
+        line.textContent = message;
+        line.style.color = color;
+        line.style.whiteSpace = "pre-wrap";
+        container.insertBefore(line, prompt);
+        prompt.scrollIntoView();
+      };
+
+      input.setAttribute("autofocus", "true");
+      input.setAttribute("spellcheck", "false");
+      input.style.margin = input.style.padding = 0;
+      input.style.border = input.style.outline = 0;
+      input.style.flex = 1;
+      input.style.font = "inherit";
+
+      prompt.innerHTML = "&gt;&nbsp;";
+      prompt.style.display = "flex";
+      prompt.appendChild(input);
+      container.appendChild(prompt);
+
+      input.addEventListener("keydown", event => {
+        if (event.key == "Enter") {
+          print("> " + input.value, null);
+          if (input.value.trim()) {
+            history.push(input.value);
+            if (handler)
+              handler(input.value);
+          }
+          input.value = "";
+          buffer = history.concat([""]);
+          index = history.length;
+        } else if (event.key == "ArrowUp") {
+          buffer[index] = input.value;
+          if (index > 0)
+            input.value = buffer[--index];
+          event.preventDefault();
+        } else if (event.key == "ArrowDown") {
+          buffer[index] = input.value;
+          if (index + 1 < buffer.length)
+            input.value = buffer[++index];
+          event.preventDefault();
+        }
+      });
+
+      for (type of ["focus", "keypress", "paste"])
+        window.addEventListener(type, event => input.focus());
+      return print;
+    }
+
+    document.addEventListener("DOMContentLoaded", async function() {
+      const log = document.getElementById("shell");
+      const print = shell(log, send);
+      const error = message => print(message, "red");
+      const transmit = await midi(chooser("rx"), chooser("rx2"), chooser("rx3"), chooser("rx4"), chooser("tx"), receive);
+
+      function send(line) {
+        const words = line.split(/\s+/).filter(Boolean);
+        if (words[0] == "clear") {
+          while (log.childNodes.length > 1)
+            log.removeChild(log.firstChild);
+          return;
+        }
+
+        const bytes = words.map(x => Number("0x" + x));
+        if (bytes.some(x => isNaN(x) || x > 0xff))
+          return error("Invalid byte sequence: " + line.trim());
+        else if (bytes[0] & 0x80 == 0)
+          return error("Commands must start with a status byte");
+        else if (bytes[0] == 0xf0 && bytes[bytes.length - 1] != 0xf7)
+          return error("System exclusive messages must end with f7");
+
+        try {
+          if (transmit && bytes.length > 0)
+            transmit(bytes);
+        } catch {
+          error("Invalid MIDI command: " + line.trim());
+        }
+      }
+
+      function receive(event) {
+        const filter = document.getElementById("filter").value;
+        if (filter != "exclusive" || event.data[0] == 0xf0)
+          if (filter != "common" || event.data[0] < 0xf8)
+			  console.log(event.data[4])
+            print(event.data.reduce(function(s, x, a) {
+              return s + " " + x.toString(16).padStart(2, "0");
+            }, "").slice(1), "green");
+      }
+
+      if (transmit == null)
+        return error("Web MIDI not supported or port access refused");
+      if (document.getElementById("rx").childNodes.length == 0)
+        error("Warning: no MIDI inputs found");
+      if (document.getElementById("tx").childNodes.length == 0)
+        error("Warning: no MIDI outputs found");
+    });
+  </script>
+
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+    }
+
+    body {
+      display: flex;
+      flex-direction: column;
+      overflow-y: hidden;
+    }
+
+    header {
+      display: flex;
+      border-bottom: 1px solid #ddd;
+      padding: 4px;
+      font-family: system-ui, sans-serif;
+    }
+
+    header > * {
+      margin: 4px;
+    }
+
+    header #title {
+      flex: 1;
+      color: inherit;
+      font-weight: bold;
+      text-decoration: inherit;
+    }
+
+    header select:empty {
+      visibility: hidden;
+    }
+
+    main {
+      flex: 1;
+      padding: 0 8px;
+      font-family: monospace;
+      overflow-y: auto;
+    }
+  </style>
 </head>
 
 <body>
-    <noscript>You need to enable JavaScript to run this app.</noscript>
-    <svg id="background" width="100%" height="100%"></svg>
-    <div id="rnbo-root">
-		<div>
-			<h1 id="patcher-title">Unnamed patcher</h1>
-		</div>
-        <div id="rnbo-clickable-keyboard">
-            <h2>MIDI Keyboard</h2>
-            <em id="no-midi-label">No MIDI input</em>
-        </div>
-        <div id="rnbo-inports">
-            <h2>Inports</h2>
-            <em id="no-inports-label">No inports available</em>
-            <form id="inport-form" className="inport">
-                <div className="inport-input">
-                    <select id="inport-select"></select>
-                    <input id="inport-text" type="text"></input>
-                    <input id="inport-submit" className="smallButton" type="submit" value="Send"/>
-                </div>
-            </form>
-        </div>
-		<div id="rnbo-console">
-			<h2>Outports</h2>
-			<em id="no-outports-label">No outports available</em>
-			<div id="rnbo-console-div">
-				<p id="rnbo-console-readout">Waiting for messages...</p>
-				<em id="rnbo-console-description">Check the developer console for more messages from the RNBO device</em>
-			</div>
-		</div>
-		<div id="rnbo-presets">
-			<h2>Presets</h2>
-			<em id="no-presets-label">No presets defined</em>
-			<select id="preset-select"></select>
-		</div>
-        <div id="rnbo-parameter-sliders">
-            <h2>Parameters</h2>
-            <em id="no-param-label">No parameters</em>
-        </div>
-    </div>
+  <header>
+    <a href="https://arachsys.github.io/webmidi/" id="title">
+RNBO Test    </a>
 
-    <!-- Load the script that creates the RNBO device  -->
-    <!-- Uncomment if you know the version of your exported RNBO patch to avoid dynamic loading -->
-    <!-- <script type="text/javascript" src="https://cdn.cycling74.com/rnbo/latest/rnbo.min.js"></script> -->
-
-    <!-- (Optional) The guardrails.js script isn't required for RNBO to work, and you can skip including it -->
-    <!-- It simply offers some helpful error messages for common problems -->
-    <script type="text/javascript" src="js/guardrails.js"></script>
-
-    <!-- Import RNBO Engine Wrapper -->
-    <!-- Make sure to include the RNBO engine version to the version of your exported code, found in rnbopackage.json -->
-    <script src="https://cdn.jsdelivr.net/npm/webmidi@latest/dist/iife/webmidi.iife.js"></script>
-    <script type="text/javascript" src="js/app.js"></script>
-    <script type="text/javascript" src="js/app.js"></script>
+	<a>
+		Input 1 <select id="rx" title="Input 1"></select>	
+	</a>
 	
+	<a>
+		Input 2 <select id="rx2" title="Input 2"></select>	
+	</a>
+	
+	<a>
+		Input 3 <select id="rx3" title="Input 3"></select>
+	</a>
+	
+	<a>
+		Input 4 <select id="rx4" title="Input 4"></select>
+	</a>
+	
+	<a>
+		Output
+	    <select id="tx" title="MIDI Transmit Port"></select>
+	</a>
+    <select id="filter" title="Display Filter">
+        <option value="common">Channel &amp; Common</option>
+      <option value="exclusive">System Exclusive</option>
+      <option value="realtime">All Messages</option>
+    </select>
+  </header>
+  <main id="shell"></main>
 </body>
 </html>
